@@ -15,7 +15,7 @@
     { "id": "tanda5", "nombre": "Última tanda", "desde": "2026-12-17", "hasta": "2026-12-18", "precio": 25000 }
   ],
   "transferencia": {
-    "habilitada": true,
+    "habilitada": false,
     "alias": "lemonfest2026",
     "cbu": "",
     "titular": "",
