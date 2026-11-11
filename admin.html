@@ -85,7 +85,7 @@ $('entrar').onclick = async () => {
   if (!r.ok) return ($('lerr').textContent = d.error);
   $('login').style.display = 'none'; iniciar();
 };
-$('clave').onkeydown = (e) => e.key === 'Enter' && $('entrar').click();
+$('clave').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('entrar').click(); });
 $('salir').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); location.reload(); };
 
 async function iniciar() {

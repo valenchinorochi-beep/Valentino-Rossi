@@ -79,7 +79,7 @@ $('entrar').onclick = async () => {
   if (!r.ok) return ($('lerr').textContent = d.error);
   $('login').style.display = 'none'; iniciar();
 };
-$('pin').onkeydown = (e) => e.key === 'Enter' && $('entrar').click();
+$('pin').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('entrar').click(); });
 $('salir').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); location.reload(); };
 
 async function stats() {
@@ -148,7 +148,7 @@ function cerrar() {
 $('res').onclick = cerrar;
 
 $('verificar').onclick = () => { const c = $('manual').value.trim(); if (c) { $('manual').value = ''; verificar(c); } };
-$('manual').onkeydown = (e) => e.key === 'Enter' && $('verificar').click();
+$('manual').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('verificar').click(); });
 sesion();
 </script>
 </body>
