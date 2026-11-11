@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "Venta de entradas con QR (Mercado Pago o transferencia) y escáner de ingreso",
-  "main": "src/server.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node --no-warnings src/server.js"
+    "start": "node --no-warnings server.js"
   },
   "engines": {
     "node": ">=22.13"
