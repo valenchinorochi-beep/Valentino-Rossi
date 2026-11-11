@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#fde98a">
+<title>Entradas</title>
+<link rel="icon" href="/limon.svg">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <h1 id="ev-nombre">&nbsp;</h1>
+    <p class="meta" id="ev-fecha"></p>
+    <p id="ev-lugar"></p>
+    <p id="ev-desc"></p>
+  </div>
+
+  <div id="cerrado" class="card aviso" style="display:none"></div>
+
+  <form id="f" class="card" autocomplete="on" style="display:none">
+    <h2>1. Tu entrada</h2>
+    <div class="tanda"><div><b id="t-nombre"></b><small id="t-hasta"></small></div><span class="precio" id="t-precio"></span></div>
+    <p class="muted" id="t-sube" style="font-size:13px;margin:8px 2px 0"></p>
+
+    <label for="cantidad">Cantidad</label>
+    <select id="cantidad"></select>
+
+    <h2 style="margin-top:22px">2. Tus datos</h2>
+    <label for="nombre">Nombre y apellido</label>
+    <input id="nombre" name="name" required autocomplete="name">
+    <label for="dni">DNI (se pide en la puerta)</label>
+    <input id="dni" inputmode="numeric" required>
+    <label for="email">Email</label>
+    <input id="email" type="email" required autocomplete="email">
+    <label for="telefono">Celular (opcional)</label>
+    <input id="telefono" type="tel" autocomplete="tel">
+
+    <h2 style="margin-top:22px">3. Forma de pago</h2>
+    <div class="metodos" id="metodos"></div>
+
+    <div class="total"><span>Total</span><span id="total">$0</span></div>
+    <button class="btn" id="comprar" type="submit">Continuar</button>
+    <div class="err" id="err"></div>
+    <p class="muted" style="font-size:13px">Cada entrada tiene un QR único que se puede usar una sola vez. No lo compartas.</p>
+  </form>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let ev, metodoSel = null;
+const fmt = (n) => '$' + Number(n).toLocaleString('es-AR');
+const ddmm = (iso) => { const [y, m, d] = iso.split('-'); return `${d}/${m}`; };
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function cargar() {
+  ev = await (await fetch('/api/evento')).json();
+  document.title = 'Entradas · ' + ev.nombre;
+  const partes = ev.nombre.split(' ');
+  const ult = partes.length > 1 ? partes.pop() : '';
+  $('ev-nombre').innerHTML = esc(partes.join(' ')) + (ult ? ` <span class="l">${esc(ult)}</span>` : '');
+  $('ev-fecha').textContent = ev.fecha;
+  $('ev-lugar').textContent = ev.lugar || '';
+  $('ev-desc').textContent = ev.descripcion || '';
+
+  if (ev.estado === 'abierta') return mostrarVenta();
+
+  const c = $('cerrado');
+  c.style.display = 'block';
+  if (ev.estado === 'proxima') {
+    const f = new Date(ev.abre).toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
+    c.innerHTML = `<div style="font-size:42px">🍋</div><div class="big">La venta arranca el ${esc(f)}</div>
+      <div class="muted">Volvé ese día para sacar tu entrada.</div><div class="cuenta" id="cuenta"></div>`;
+    cuentaRegresiva(ev.abre);
+  } else if (ev.estado === 'agotada') {
+    c.innerHTML = `<div style="font-size:42px">🍋</div><div class="big">Entradas agotadas</div>`;
+  } else {
+    c.innerHTML = `<div style="font-size:42px">🍋</div><div class="big">La venta online terminó</div><div class="muted">¡Nos vemos en la fiesta!</div>`;
+  }
+}
+
+function cuentaRegresiva(hasta) {
+  const tick = () => {
+    let s = Math.max(0, Math.floor((hasta - Date.now()) / 1000));
+    if (s === 0) return location.reload();
+    const d = Math.floor(s / 86400); s %= 86400;
+    const h = Math.floor(s / 3600); s %= 3600;
+    const m = Math.floor(s / 60); s %= 60;
+    $('cuenta').innerHTML = [[d, 'días'], [h, 'horas'], [m, 'min'], [s, 'seg']].map(([v, l]) => `<div><b>${v}</b><small>${l}</small></div>`).join('');
+  };
+  tick(); setInterval(tick, 1000);
+}
+
+function mostrarVenta() {
+  $('f').style.display = 'block';
+  const t = ev.tanda;
+  $('t-nombre').textContent = 'Entrada · ' + t.nombre;
+  $('t-hasta').textContent = `Precio válido hasta el ${ddmm(t.hasta)}`;
+  $('t-precio').textContent = fmt(t.precio);
+  $('t-sube').textContent = t.haySiguiente ? `🍋 Después del ${ddmm(t.hasta)} el precio sube.` : '🍋 Es la última tanda.';
+  if (ev.disponibles !== null && ev.disponibles <= 30) $('t-sube').textContent += ` ¡Quedan ${ev.disponibles}!`;
+
+  const max = Math.min(ev.maxPorCompra || 6, ev.disponibles ?? 99);
+  for (let i = 1; i <= max; i++) $('cantidad').add(new Option(i + (i === 1 ? ' entrada' : ' entradas'), i));
+  $('cantidad').onchange = total; total();
+
+  const ms = [];
+  if (ev.metodos.mp) ms.push(['mp', 'Mercado Pago', 'Tarjeta, débito o dinero en cuenta · QR al instante']);
+  if (ev.metodos.transfer) ms.push(['transfer', 'Transferencia', 'Subís el comprobante · QR cuando se aprueba']);
+  if (ms.length === 1) $('metodos').style.gridTemplateColumns = '1fr';
+  ms.forEach(([id, nom, desc]) => {
+    const d = document.createElement('div');
+    d.className = 'metodo';
+    d.innerHTML = `<div></div><small class="muted" style="font-weight:400"></small>`;
+    d.firstChild.textContent = nom; d.lastChild.textContent = desc;
+    d.onclick = () => { metodoSel = id; document.querySelectorAll('.metodo').forEach((x) => x.classList.remove('sel')); d.classList.add('sel'); };
+    $('metodos').appendChild(d);
+  });
+  if (ms.length) $('metodos').firstChild.click();
+  else { $('comprar').disabled = true; $('err').textContent = 'La venta todavía no está habilitada.'; }
+}
+
+function total() { $('total').textContent = fmt(ev.tanda.precio * Number($('cantidad').value)); }
+
+$('f').onsubmit = async (e) => {
+  e.preventDefault();
+  $('err').textContent = '';
+  if (!metodoSel) return ($('err').textContent = 'Elegí la forma de pago');
+  $('comprar').disabled = true; $('comprar').textContent = 'Procesando…';
+  try {
+    const r = await fetch('/api/ordenes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cantidad: $('cantidad').value, nombre: $('nombre').value, dni: $('dni').value, email: $('email').value, telefono: $('telefono').value, metodo: metodoSel }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Error');
+    location.href = d.url;
+  } catch (er) {
+    $('err').textContent = er.message;
+    $('comprar').disabled = false; $('comprar').textContent = 'Continuar';
+  }
+};
+cargar();
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "nombre": "Lemon Fest",
+  "fecha": "Sábado 19 de diciembre",
+  "lugar": "",
+  "descripcion": "",
+  "moneda": "ARS",
+  "zonaHoraria": "-03:00",
+  "cupoTotal": null,
+  "maxPorCompra": 6,
+  "tandas": [
+    { "id": "tanda1", "nombre": "1ra tanda", "desde": "2026-11-19", "hasta": "2026-11-26", "precio": 15000 },
+    { "id": "tanda2", "nombre": "2da tanda", "desde": "2026-11-27", "hasta": "2026-12-03", "precio": 17500 },
+    { "id": "tanda3", "nombre": "3ra tanda", "desde": "2026-12-04", "hasta": "2026-12-11", "precio": 20000 },
+    { "id": "tanda4", "nombre": "4ta tanda", "desde": "2026-12-12", "hasta": "2026-12-16", "precio": 22500 },
+    { "id": "tanda5", "nombre": "Última tanda", "desde": "2026-12-17", "hasta": "2026-12-18", "precio": 25000 }
+  ],
+  "transferencia": {
+    "habilitada": true,
+    "alias": "lemonfest2026",
+    "cbu": "",
+    "titular": "",
+    "banco": ""
+  },
+  "mercadopago": {
+    "habilitado": true
+  }
+}

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel · Entradas</title>
+<link rel="icon" href="/limon.svg">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 5; }
+  #modal .box { color: var(--text); background: var(--card); border-radius: var(--r); padding: 16px; max-width: 700px; width: 100%; max-height: 92vh; overflow: auto; }
+  #modal img, #modal iframe { width: 100%; border-radius: 10px; background: #fff; }
+  #modal iframe { height: 70vh; border: 0; }
+  .acciones { display: flex; gap: 6px; flex-wrap: wrap; }
+  @media (max-width: 700px) { .hide-m { display: none; } }
+</style>
+</head>
+<body>
+<div class="wrap wide">
+  <div id="login" class="card" style="display:none;max-width:420px;margin:40px auto">
+    <h2>Panel de administración</h2>
+    <label for="clave">Contraseña</label>
+    <input id="clave" type="password">
+    <button class="btn" id="entrar" style="margin-top:14px">Entrar</button>
+    <div class="err" id="lerr"></div>
+  </div>
+
+  <div id="main" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap">
+      <h1 style="margin:0;font-size:26px">Panel</h1>
+      <div class="acciones">
+        <a class="btn sec sm" href="/scanner">Abrir escáner</a>
+        <a class="btn sec sm" href="/api/admin/export.csv">Descargar lista (CSV)</a>
+        <button class="btn sec sm" id="salir">Salir</button>
+      </div>
+    </div>
+    <div class="stats" id="stats"></div>
+    <div class="stats" id="tandas"></div>
+
+    <div class="card">
+      <div class="tabs" id="tabs">
+        <button data-f="revisar" class="sel">Transferencias a revisar</button>
+        <button data-f="pagadas">Pagadas</button>
+        <button data-f="pendientes">Pendientes</button>
+        <button data-f="todas">Todas</button>
+      </div>
+      <input id="buscar" placeholder="Buscar por nombre, email o DNI…" style="margin-bottom:10px">
+      <div style="overflow-x:auto"><table><thead><tr><th>Fecha</th><th>Comprador</th><th>Entradas</th><th class="hide-m">Pago</th><th>Estado</th><th></th></tr></thead><tbody id="lista"></tbody></table></div>
+    </div>
+
+    <div class="card">
+      <h2>Generar invitación (sin pago)</h2>
+      <div class="row" style="flex-wrap:wrap">
+        <div style="min-width:180px"><label>Nombre</label><input id="cNombre"></div>
+        <div style="min-width:120px"><label>DNI (opcional)</label><input id="cDni" inputmode="numeric"></div>
+        <div style="min-width:80px"><label>Cantidad</label><input id="cCant" type="number" value="1" min="1" max="50"></div>
+      </div>
+      <button class="btn" id="cCrear" style="margin-top:14px">Crear invitación</button>
+      <div id="cRes" style="margin-top:10px"></div>
+    </div>
+  </div>
+</div>
+<div id="modal"><div class="box" id="mbox"></div></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => '$' + Number(n).toLocaleString('es-AR');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fecha = (t) => new Date(t).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+let filtro = 'revisar', ordenes = [];
+
+async function api(url, opts = {}) {
+  const r = await fetch(url, { ...opts, headers: { 'Content-Type': 'application/json' } });
+  if (r.status === 401) { $('main').style.display = 'none'; $('login').style.display = 'block'; throw new Error('401'); }
+  return r.json();
+}
+
+async function sesion() {
+  const s = await (await fetch('/api/sesion')).json();
+  if (s.rol === 'admin') iniciar(); else $('login').style.display = 'block';
+}
+$('entrar').onclick = async () => {
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rol: 'admin', clave: $('clave').value }) });
+  const d = await r.json();
+  if (!r.ok) return ($('lerr').textContent = d.error);
+  $('login').style.display = 'none'; iniciar();
+};
+$('clave').onkeydown = (e) => e.key === 'Enter' && $('entrar').click();
+$('salir').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); location.reload(); };
+
+async function iniciar() {
+  $('main').style.display = 'block';
+  await resumen(); await lista();
+  setInterval(() => { resumen(); lista(); }, 20000);
+}
+
+async function resumen() {
+  const r = await api('/api/admin/resumen');
+  let h = `<div class="stat"><div class="v">${fmt(r.recaudado)}</div><div class="l">Recaudado</div></div>`;
+  h += `<div class="stat"><div class="v">${r.vendidas}${r.cupoTotal ? `<span class="muted" style="font-size:16px"> / ${r.cupoTotal}</span>` : ''}</div><div class="l">Entradas emitidas · ${r.ingresaron} ingresaron</div></div>`;
+  h += `<div class="stat"><div class="v">${r.transferenciasARevisar}</div><div class="l">Transferencias a revisar</div></div>`;
+  $('stats').innerHTML = h;
+  const dm = (iso) => iso ? iso.split('-').reverse().slice(0, 2).join('/') : '';
+  $('tandas').innerHTML = r.porTipo.map((t) => `<div class="stat ${t.actual ? 'actual' : ''}">
+    <div class="v">${t.vendidas}</div>
+    <div class="l"><b style="color:var(--text)">${esc(t.nombre)}</b>${t.desde ? ` · ${fmt(t.precio)} · ${dm(t.desde)} al ${dm(t.hasta)}` : ''}${t.actual ? ' · <b>EN VENTA</b>' : ''}</div></div>`).join('');
+}
+
+async function lista() {
+  ordenes = await api(`/api/admin/ordenes?filtro=${filtro}&q=${encodeURIComponent($('buscar').value)}`);
+  const est = { pagado: 'Pagada', pendiente: 'Pendiente', rechazado: 'Rechazada', vencido: 'Vencida' };
+  const met = { mp: 'Mercado Pago', transfer: 'Transferencia', cortesia: 'Invitación' };
+  $('lista').innerHTML = ordenes.length ? ordenes.map((o) => `<tr>
+    <td>${fecha(o.created_at)}</td>
+    <td><b>${esc(o.nombre)}</b><div class="muted">${esc(o.email)} · DNI ${esc(o.dni)}${o.telefono ? ' · ' + esc(o.telefono) : ''}</div></td>
+    <td>${o.cantidad} × ${esc(o.tipoNombre)}<div class="muted">${fmt(o.total)}</div></td>
+    <td class="hide-m">${met[o.metodo] || o.metodo}${o.nota_pago ? `<div class="muted">${esc(o.nota_pago)}</div>` : ''}</td>
+    <td><span class="pill ${o.estado}">${est[o.estado] || o.estado}</span></td>
+    <td><div class="acciones">
+      ${o.tiene_comprobante ? `<button class="btn sec sm" data-ver="${o.id}">Ver comprobante</button>` : ''}
+      ${o.estado === 'pendiente' && o.metodo === 'transfer' ? `<button class="btn ok sm" data-ap="${o.id}">Aprobar</button><button class="btn bad sm" data-re="${o.id}">Rechazar</button>` : ''}
+      ${o.estado === 'pagado' ? `<button class="btn sec sm" data-link="${o.id}">Copiar link QR</button>` : ''}
+    </div></td></tr>`).join('') : '<tr><td colspan="6" class="muted">No hay órdenes acá.</td></tr>';
+}
+
+$('lista').onclick = async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.ver) verComprobante(b.dataset.ver);
+  if (b.dataset.ap) { b.disabled = true; await api(`/api/admin/ordenes/${b.dataset.ap}/aprobar`, { method: 'POST' }); cerrarModal(); resumen(); lista(); }
+  if (b.dataset.re) { if (!confirmar(b)) return; await api(`/api/admin/ordenes/${b.dataset.re}/rechazar`, { method: 'POST' }); cerrarModal(); resumen(); lista(); }
+  if (b.dataset.link) { await navigator.clipboard.writeText(`${location.origin}/orden?id=${b.dataset.link}`); b.textContent = '¡Copiado!'; }
+};
+// Confirmación en dos toques (sin diálogos del navegador)
+function confirmar(b) { if (b.dataset.seguro) return true; b.dataset.seguro = 1; b.textContent = '¿Seguro?'; setTimeout(() => { delete b.dataset.seguro; b.textContent = 'Rechazar'; }, 3000); return false; }
+
+async function verComprobante(id) {
+  const o = ordenes.find((x) => x.id === id);
+  const r = await fetch(`/api/admin/ordenes/${id}/comprobante`);
+  const blob = await r.blob(); const url = URL.createObjectURL(blob);
+  $('mbox').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div><b>${esc(o.nombre)}</b> · debe transferir <b>${fmt(o.total)}</b>${o.nota_pago ? `<div class="muted">${esc(o.nota_pago)}</div>` : ''}</div>
+      <button class="btn sec sm" id="mcerrar">Cerrar</button></div>
+    ${blob.type === 'application/pdf' ? `<iframe src="${url}"></iframe>` : `<img src="${url}">`}
+    ${o.estado === 'pendiente' ? `<div class="row" style="margin-top:12px" id="macc"><button class="btn ok" data-ap="${id}">Aprobar</button><button class="btn bad" data-re="${id}">Rechazar</button></div>` : ''}`;
+  $('modal').style.display = 'flex';
+  $('mcerrar').onclick = cerrarModal;
+  const acc = $('macc'); if (acc) acc.onclick = $('lista').onclick;
+}
+function cerrarModal() { $('modal').style.display = 'none'; $('mbox').innerHTML = ''; }
+$('modal').onclick = (e) => e.target.id === 'modal' && cerrarModal();
+
+$('tabs').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; filtro = b.dataset.f; [...$('tabs').children].forEach((x) => x.classList.toggle('sel', x === b)); lista(); };
+let tb; $('buscar').oninput = () => { clearTimeout(tb); tb = setTimeout(lista, 300); };
+
+$('cCrear').onclick = async () => {
+  const d = await api('/api/admin/cortesia', { method: 'POST', body: JSON.stringify({ nombre: $('cNombre').value, dni: $('cDni').value, cantidad: $('cCant').value }) });
+  if (d.error) return ($('cRes').innerHTML = `<span class="err">${esc(d.error)}</span>`);
+  const link = location.origin + d.url;
+  $('cRes').innerHTML = `Listo. Mandale este link: <a href="${link}" target="_blank">${link}</a>`;
+  $('cNombre').value = ''; $('cDni').value = ''; resumen(); lista();
+};
+sesion();
+</script>
+</body>
+</html>

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tu entrada</title>
+<link rel="icon" href="/limon.svg">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div id="app"><div class="spinner"></div></div>
+</div>
+<script>
+const params = new URLSearchParams(location.search);
+const id = params.get('id');
+let paymentId = params.get('payment_id') || params.get('collection_id');
+const app = document.getElementById('app');
+const fmt = (n) => '$' + Number(n).toLocaleString('es-AR');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let timer;
+
+async function cargar() {
+  clearTimeout(timer);
+  if (!id) { app.innerHTML = '<div class="card">Falta el número de orden.</div>'; return; }
+  const q = paymentId ? `?payment_id=${encodeURIComponent(paymentId)}` : '';
+  paymentId = null;
+  const r = await fetch(`/api/ordenes/${encodeURIComponent(id)}${q}`);
+  if (!r.ok) { app.innerHTML = '<div class="card">No encontramos esta orden.</div>'; return; }
+  render(await r.json());
+}
+
+function encabezado(o) {
+  const estados = { pagado: 'Confirmada', pendiente: 'Pendiente de pago', rechazado: 'Rechazada', vencido: 'Vencida' };
+  const p = o.evento.nombre.split(' '); const u = p.length > 1 ? p.pop() : '';
+  return `<div class="hero"><h1>${esc(p.join(' '))}${u ? ` <span class="l">${esc(u)}</span>` : ''}</h1><p class="meta">${esc(o.evento.fecha)}</p><p>${esc(o.evento.lugar || '')}</p></div>
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center">
+    <div><b>${esc(o.nombre)}</b><div class="muted">${o.cantidad} ${o.cantidad === 1 ? 'entrada' : 'entradas'} · ${esc(o.tipo)} ·${o.metodo === 'cortesia' ? 'Invitación' : fmt(o.total)}</div></div>
+    <span class="pill ${o.estado}">${estados[o.estado] || o.estado}</span></div></div>`;
+}
+
+function render(o) {
+  let h = encabezado(o);
+  if (o.estado === 'pagado') {
+    h += `<div class="card"><b>📌 Guardá este link</b> o descargá los QR: los vas a mostrar en la puerta junto con tu DNI.
+      <button class="btn sec sm" style="margin-top:10px" onclick="navigator.clipboard.writeText(location.href).then(()=>this.textContent='¡Link copiado!')">Copiar link</button></div>`;
+    o.tickets.forEach((t) => {
+      h += `<div class="ticket ${t.usado ? 'usado' : ''}">
+        <h3>Entrada ${t.n} de ${o.cantidad} · ${esc(o.tipo)}</h3>
+        <div>${esc(o.nombre)}</div>
+        <img src="${t.qr}" alt="QR de la entrada ${t.n}">
+        <div class="code">${esc(t.code)}</div>
+        ${t.usado ? '<p><b>Ya ingresó</b></p>' : ''}
+        <a class="btn sm" style="margin-top:10px" download="entrada-${t.n}.png" href="${t.qr}">Descargar QR</a>
+      </div>`;
+    });
+  } else if (o.estado === 'pendiente' && o.metodo === 'mp') {
+    h += `<div class="card" style="text-align:center"><div class="spinner"></div>
+      <p>Estamos esperando la confirmación de Mercado Pago. Esta página se actualiza sola.</p>
+      <p class="muted">Si cerraste el pago sin terminar, <a href="/">volvé a comprar</a>.</p></div>`;
+    timer = setTimeout(cargar, 5000);
+  } else if (o.estado === 'pendiente' && o.metodo === 'transfer') {
+    const tr = o.transferencia || {};
+    h += `<div class="card"><h2>Transferí ${fmt(o.total)}</h2>
+      <div class="datos">
+        ${tr.alias ? `<div><span>Alias</span><span class="copy" data-c="${esc(tr.alias)}">${esc(tr.alias)} ⧉</span></div>` : ''}
+        ${tr.cbu ? `<div><span>CBU/CVU</span><span class="copy" data-c="${esc(tr.cbu)}">${esc(tr.cbu)} ⧉</span></div>` : ''}
+        ${tr.titular ? `<div><span>Titular</span><span>${esc(tr.titular)}</span></div>` : ''}
+        ${tr.banco ? `<div><span>Banco</span><span>${esc(tr.banco)}</span></div>` : ''}
+        <div><span>Monto</span><span class="copy" data-c="${o.total}">${fmt(o.total)} ⧉</span></div>
+      </div></div>`;
+    if (o.tieneComprobante) {
+      h += `<div class="card" style="text-align:center"><div class="spinner"></div><p><b>Comprobante recibido ✔</b></p>
+        <p class="muted">Lo estamos revisando. Cuando se apruebe, tus QR aparecen en esta misma página. Guardá el link.</p>
+        <button class="btn sec sm" onclick="navigator.clipboard.writeText(location.href).then(()=>this.textContent='¡Link copiado!')">Copiar link</button></div>`;
+      timer = setTimeout(cargar, 15000);
+    } else {
+      h += `<div class="card"><h2>Subí el comprobante</h2>
+        <input type="file" id="archivo" accept="image/*,application/pdf">
+        <label for="nota">Número de operación o nombre del titular de la cuenta (opcional)</label>
+        <input id="nota" maxlength="200">
+        <button class="btn" id="enviar" style="margin-top:14px">Enviar comprobante</button>
+        <div class="err" id="err"></div>
+        <p class="muted" style="font-size:13px">Guardá este link para volver a ver tu orden.</p></div>`;
+    }
+  } else {
+    h += `<div class="card">Esta orden no está activa. <a href="/">Comprar entradas</a></div>`;
+  }
+  app.innerHTML = h;
+  app.querySelectorAll('.copy').forEach((el) => (el.onclick = () => navigator.clipboard.writeText(el.dataset.c).then(() => { const t = el.textContent; el.textContent = '¡Copiado!'; setTimeout(() => (el.textContent = t), 1200); })));
+  const btn = document.getElementById('enviar');
+  if (btn) btn.onclick = enviar;
+}
+
+async function aDataURL(file) {
+  if (file.type === 'application/pdf') {
+    return new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(file); });
+  }
+  // Achica la imagen para que suba rápido
+  const img = await createImageBitmap(file);
+  const s = Math.min(1, 1600 / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.8);
+}
+
+async function enviar() {
+  const err = document.getElementById('err'), btn = document.getElementById('enviar');
+  const f = document.getElementById('archivo').files[0];
+  err.textContent = '';
+  if (!f) return (err.textContent = 'Elegí la foto o PDF del comprobante');
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  try {
+    const imagen = await aDataURL(f);
+    const r = await fetch(`/api/ordenes/${encodeURIComponent(id)}/comprobante`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imagen, nota: document.getElementById('nota').value }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Error');
+    cargar();
+  } catch (e) {
+    err.textContent = e.message; btn.disabled = false; btn.textContent = 'Enviar comprobante';
+  }
+}
+cargar();
+</script>
+</body>
+</html>

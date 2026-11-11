@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#fde98a">
+<title>Escáner de entradas</title>
+<link rel="icon" href="/limon.svg">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  #reader { width: 100%; border-radius: var(--r); overflow: hidden; background: #000; min-height: 260px; }
+  #reader video { object-fit: cover; }
+  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .contador { font-size: 15px; color: var(--muted); }
+  .contador b { color: var(--text); font-size: 20px; }
+  #res { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 30px; z-index: 10; cursor: pointer; color: #fff; }
+  #res.valido { background: var(--ok); }
+  #res.usado { background: var(--bad); }
+  #res.invalido { background: #8a1c1c; }
+  #res .ico { font-size: 110px; line-height: 1; }
+  #res .t { font-size: 40px; font-weight: 900; margin: 10px 0; letter-spacing: -0.02em; }
+  #res .d { font-size: 22px; font-weight: 600; }
+  #res .s { font-size: 17px; opacity: .9; margin-top: 8px; }
+  #res .tap { position: absolute; bottom: 30px; opacity: .8; font-size: 15px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="login" class="card" style="display:none">
+    <h2>Escáner de entradas</h2>
+    <label for="pin">PIN de staff</label>
+    <input id="pin" type="password" inputmode="numeric" autocomplete="off">
+    <button class="btn" id="entrar" style="margin-top:14px">Entrar</button>
+    <div class="err" id="lerr"></div>
+  </div>
+
+  <div id="main" style="display:none">
+    <div class="top">
+      <div class="contador">Adentro: <b id="adentro">0</b> / <span id="total">0</span></div>
+      <button class="btn sec sm" id="salir">Salir</button>
+    </div>
+    <div id="reader"></div>
+    <p class="muted" id="estadoCam" style="text-align:center">Iniciando cámara…</p>
+    <div class="card">
+      <label for="manual" style="margin-top:0">¿No lee el QR? Pegá o escribí el código</label>
+      <div class="row"><input id="manual" placeholder="TK-..." autocapitalize="off" autocomplete="off"><button class="btn sm" id="verificar" style="flex:0 0 auto">Verificar</button></div>
+    </div>
+  </div>
+</div>
+
+<div id="res"><div class="ico"></div><div class="t"></div><div class="d"></div><div class="s"></div><div class="tap">Tocá para seguir escaneando</div></div>
+
+<script src="/vendor/html5-qrcode.min.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let qr, ocupado = false, ultimo = { code: '', t: 0 }, cierre;
+let audio;
+
+function beep(ok) {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.connect(g); g.connect(audio.destination);
+    o.frequency.value = ok ? 1100 : 220; o.type = ok ? 'sine' : 'square';
+    g.gain.value = 0.25; o.start(); o.stop(audio.currentTime + (ok ? 0.15 : 0.5));
+  } catch {}
+  if (navigator.vibrate) navigator.vibrate(ok ? 80 : [200, 80, 200]);
+}
+
+async function sesion() {
+  const s = await (await fetch('/api/sesion')).json();
+  if (s.rol === 'staff' || s.rol === 'admin') iniciar(); else $('login').style.display = 'block';
+}
+
+$('entrar').onclick = async () => {
+  $('lerr').textContent = '';
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rol: 'staff', clave: $('pin').value }) });
+  const d = await r.json();
+  if (!r.ok) return ($('lerr').textContent = d.error);
+  $('login').style.display = 'none'; iniciar();
+};
+$('pin').onkeydown = (e) => e.key === 'Enter' && $('entrar').click();
+$('salir').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); location.reload(); };
+
+async function stats() {
+  try { const s = await (await fetch('/api/scan/stats')).json(); $('adentro').textContent = s.adentro; $('total').textContent = s.total; } catch {}
+}
+
+async function iniciar() {
+  $('main').style.display = 'block';
+  stats(); setInterval(stats, 15000);
+  qr = new Html5Qrcode('reader', { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false });
+  try {
+    await qr.start({ facingMode: 'environment' }, { fps: 12, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.75); return { width: s, height: s }; } }, onScan, () => {});
+    $('estadoCam').textContent = 'Apuntá al QR de la entrada';
+  } catch (e) {
+    $('estadoCam').innerHTML = 'No se pudo abrir la cámara. Revisá los permisos del navegador (y que la página esté en <b>https</b>).';
+  }
+}
+
+function onScan(text) {
+  if (ocupado) return;
+  // Evita leer dos veces seguidas el mismo QR (si no, la 2da lectura diría "ya usado")
+  if (text === ultimo.code && Date.now() - ultimo.t < 5000) return;
+  verificar(text);
+}
+
+async function verificar(code) {
+  ocupado = true;
+  ultimo = { code, t: Date.now() };
+  try { qr && qr.getState() === 2 && qr.pause(true); } catch {}
+  let d;
+  try {
+    const r = await fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    if (r.status === 401) { location.reload(); return; }
+    d = await r.json();
+  } catch {
+    d = { resultado: 'error' };
+  }
+  mostrar(d);
+}
+
+function mostrar(d) {
+  const res = $('res');
+  res.className = d.resultado === 'error' ? 'invalido' : d.resultado;
+  const [ico, t, det, s] = {
+    valido: ['✅', 'VÁLIDA', `${d.nombre}`, `${d.tipo} · DNI ${d.dni}${d.de > 1 ? ` · entrada ${d.n} de ${d.de}` : ''}`],
+    usado: ['⛔', 'YA USADA', `${d.nombre}`, `Ingresó a las ${new Date(d.usadoEn).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })} · ${d.tipo} · DNI ${d.dni}`],
+    invalido: ['❌', 'NO VÁLIDA', 'Este QR no es una entrada de la fiesta', ''],
+    error: ['⚠️', 'SIN CONEXIÓN', 'No se pudo verificar', 'Revisá internet e intentá de nuevo'],
+  }[d.resultado];
+  res.querySelector('.ico').textContent = ico;
+  res.querySelector('.t').textContent = t;
+  res.querySelector('.d').textContent = det;
+  res.querySelector('.s').textContent = s;
+  res.style.display = 'flex';
+  beep(d.resultado === 'valido');
+  if (d.resultado === 'valido') { stats(); cierre = setTimeout(cerrar, 2500); }
+}
+
+function cerrar() {
+  clearTimeout(cierre);
+  $('res').style.display = 'none';
+  ultimo.t = Date.now();
+  ocupado = false;
+  try { qr && qr.getState() === 3 && qr.resume(); } catch {}
+}
+$('res').onclick = cerrar;
+
+$('verificar').onclick = () => { const c = $('manual').value.trim(); if (c) { $('manual').value = ''; verificar(c); } };
+$('manual').onkeydown = (e) => e.key === 'Enter' && $('verificar').click();
+sesion();
+</script>
+</body>
+</html>
