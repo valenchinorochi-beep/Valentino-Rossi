@@ -22,13 +22,13 @@
   "mostrarVendidasEn": "tanda1",
   "mostrarQuedanEn": "tanda5",
   "transferencia": {
-    "habilitada": false,
+    "habilitada": true,
     "alias": "lemonfest2026",
     "cbu": "",
-    "titular": "",
+    "titular": "Valentino Rossi",
     "banco": ""
   },
   "mercadopago": {
-    "habilitado": true
+    "habilitado": false
   }
 }
