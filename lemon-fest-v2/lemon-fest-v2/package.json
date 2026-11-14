@@ -1,0 +1,19 @@
+{
+  "name": "entradas-fiesta",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Venta de entradas con QR (Mercado Pago o transferencia) y escáner de ingreso",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --no-warnings server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^4.22.3",
+    "html5-qrcode": "^2.3.8",
+    "pg": "^8.23.1",
+    "qrcode": "^1.5.4"
+  }
+}

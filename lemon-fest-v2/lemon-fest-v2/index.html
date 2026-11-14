@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#fde98a">
+<title>Entradas</title>
+<link rel="icon" href="/limon.svg">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <h1 id="ev-nombre">&nbsp;</h1>
+    <p class="meta" id="ev-fecha"></p>
+    <p id="ev-lugar"></p>
+    <p id="ev-desc"></p>
+  </div>
+
+  <div id="cerrado" class="card aviso" style="display:none"></div>
+
+  <div id="aviso-vendidas" class="banner" style="display:none"></div>
+  <div id="aviso-quedan" class="banner alerta" style="display:none"></div>
+  <div id="promo" class="card promo" style="display:none">
+    <div class="promo-top"><span class="promo-tag">PROMO</span><span id="promo-quedan" class="muted"></span></div>
+    <div class="promo-txt" id="promo-txt"></div>
+    <button type="button" class="btn sm" id="promo-btn">Quiero la promo</button>
+  </div>
+
+  <form id="f" class="card" autocomplete="on" style="display:none">
+    <h2>1. Tu entrada</h2>
+    <div class="tanda"><div><b id="t-nombre"></b><small id="t-hasta"></small></div><span class="precio" id="t-precio"></span></div>
+    <p class="muted" id="t-sube" style="font-size:13px;margin:8px 2px 0"></p>
+
+    <label for="cantidad">¿Cuántas entradas?</label>
+    <select id="cantidad"></select>
+
+    <h2 style="margin-top:22px">2. Datos de cada persona</h2>
+    <p class="muted" style="font-size:13px;margin:-6px 0 4px">Cada entrada es personal: en la puerta se escanea el QR y se controla el DNI.</p>
+    <div id="personas"></div>
+
+    <h2 style="margin-top:22px">3. Tu contacto</h2>
+    <label for="email">Email</label>
+    <input id="email" type="email" required autocomplete="email">
+    <label for="telefono">Celular (opcional)</label>
+    <input id="telefono" type="tel" autocomplete="tel">
+
+    <h2 style="margin-top:22px">4. Forma de pago</h2>
+    <div class="metodos" id="metodos"></div>
+
+    <div class="total"><span>Total</span><span id="total">$0</span></div>
+    <p id="promo-aplicada" class="promo-ok" style="display:none">🍋 ¡Promo aplicada!</p>
+    <button class="btn" id="comprar" type="submit">Continuar</button>
+    <div class="err" id="err"></div>
+    <p class="muted" style="font-size:13px">Cada entrada tiene un QR único que se puede usar una sola vez. No lo compartas.</p>
+  </form>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let ev, metodoSel = null;
+const fmt = (n) => '$' + Number(n).toLocaleString('es-AR');
+const ddmm = (iso) => { const [y, m, d] = iso.split('-'); return `${d}/${m}`; };
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function cargar() {
+  ev = await (await fetch('/api/evento')).json();
+  document.title = 'Entradas · ' + ev.nombre;
+  const partes = ev.nombre.split(' ');
+  const ult = partes.length > 1 ? partes.pop() : '';
+  $('ev-nombre').innerHTML = esc(partes.join(' ')) + (ult ? ` <span class="l">${esc(ult)}</span>` : '');
+  $('ev-fecha').textContent = ev.fecha;
+  $('ev-lugar').textContent = ev.lugar || '';
+  $('ev-desc').textContent = ev.descripcion || '';
+
+  if (ev.estado === 'abierta') return mostrarVenta();
+
+  const c = $('cerrado');
+  c.style.display = 'block';
+  if (ev.estado === 'proxima') {
+    const f = new Date(ev.abre).toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
+    c.innerHTML = `<div style="font-size:42px">🍋</div><div class="big">La venta arranca el ${esc(f)}</div>
+      <div class="muted">Volvé ese día para sacar tu entrada.</div><div class="cuenta" id="cuenta"></div>`;
+    cuentaRegresiva(ev.abre);
+  } else if (ev.estado === 'agotada') {
+    c.innerHTML = `<div style="font-size:42px">🍋</div><div class="big">Entradas agotadas</div>`;
+  } else {
+    c.innerHTML = `<div style="font-size:42px">🍋</div><div class="big">La venta online terminó</div><div class="muted">¡Nos vemos en la fiesta!</div>`;
+  }
+}
+
+function cuentaRegresiva(hasta) {
+  const tick = () => {
+    let s = Math.max(0, Math.floor((hasta - Date.now()) / 1000));
+    if (s === 0) return location.reload();
+    const d = Math.floor(s / 86400); s %= 86400;
+    const h = Math.floor(s / 3600); s %= 3600;
+    const m = Math.floor(s / 60); s %= 60;
+    $('cuenta').innerHTML = [[d, 'días'], [h, 'horas'], [m, 'min'], [s, 'seg']].map(([v, l]) => `<div><b>${v}</b><small>${l}</small></div>`).join('');
+  };
+  tick(); setInterval(tick, 1000);
+}
+
+function mostrarVenta() {
+  $('f').style.display = 'block';
+  const t = ev.tanda;
+  $('t-nombre').textContent = 'Entrada · ' + t.nombre;
+  $('t-hasta').textContent = t.haySiguiente ? `Hasta el ${t.hastaTexto} o hasta agotar cupo` : `Hasta el ${t.hastaTexto}`;
+  $('t-precio').textContent = fmt(t.precio);
+  $('t-sube').textContent = t.haySiguiente ? '🍋 Cuando se termina esta tanda, el precio sube.' : '🍋 Es la última tanda.';
+
+  // Mensajes especiales según la tanda
+  if (ev.vendidas > 0) { $('aviso-vendidas').innerHTML = `🔥 Ya se vendieron <b>${ev.vendidas}</b> entradas`; $('aviso-vendidas').style.display = 'block'; }
+  if (ev.quedan != null) { $('aviso-quedan').innerHTML = `⚠️ Quedan <b>${ev.quedan}</b> ${ev.quedan === 1 ? 'entrada disponible' : 'entradas disponibles'}`; $('aviso-quedan').style.display = 'block'; }
+  if (ev.promo) {
+    const p = ev.promo;
+    $('promo-txt').innerHTML = `<b>${p.cantidad} entradas por ${fmt(p.precio)}</b><br><span class="muted">Sale ${fmt(p.precio / p.cantidad)} cada una en vez de ${fmt(t.precio)}</span>`;
+    $('promo-quedan').textContent = p.quedan === 1 ? '¡Queda 1 promo!' : `Quedan ${p.quedan} promos`;
+    $('promo').style.display = 'block';
+    $('promo-btn').onclick = () => { $('cantidad').value = p.cantidad; cambiarCantidad(); $('personas').scrollIntoView({ behavior: 'smooth' }); };
+  }
+
+  const max = ev.maxCompra || 1;
+  for (let i = 1; i <= max; i++) $('cantidad').add(new Option(i + (i === 1 ? ' entrada' : ' entradas'), i));
+  $('cantidad').onchange = cambiarCantidad; cambiarCantidad();
+
+  const ms = [];
+  if (ev.metodos.mp) ms.push(['mp', 'Mercado Pago', 'Tarjeta, débito o dinero en cuenta · QR al instante']);
+  if (ev.metodos.transfer) ms.push(['transfer', 'Transferencia', 'Subís el comprobante · QR cuando se aprueba']);
+  if (ms.length === 1) $('metodos').style.gridTemplateColumns = '1fr';
+  ms.forEach(([id, nom, desc]) => {
+    const d = document.createElement('div');
+    d.className = 'metodo';
+    d.innerHTML = `<div></div><small class="muted" style="font-weight:400"></small>`;
+    d.firstChild.textContent = nom; d.lastChild.textContent = desc;
+    d.onclick = () => { metodoSel = id; document.querySelectorAll('.metodo').forEach((x) => x.classList.remove('sel')); d.classList.add('sel'); };
+    $('metodos').appendChild(d);
+  });
+  if (ms.length) $('metodos').firstChild.click();
+  else { $('comprar').disabled = true; $('err').textContent = 'La venta todavía no está habilitada.'; }
+}
+
+// Arma un bloque de nombre / apellido / DNI por cada entrada (conserva lo ya escrito)
+const datos = [];
+function guardarDatos() {
+  document.querySelectorAll('.persona').forEach((el, i) => {
+    datos[i] = { nombre: el.querySelector('.p-nombre').value, apellido: el.querySelector('.p-apellido').value, dni: el.querySelector('.p-dni').value };
+  });
+}
+function cambiarCantidad() {
+  guardarDatos();
+  const n = Number($('cantidad').value);
+  let h = '';
+  for (let i = 0; i < n; i++) {
+    const d = datos[i] || {};
+    h += `<div class="persona">
+      <div class="persona-tit">Entrada ${i + 1}${i === 0 ? ' · vos' : ''}</div>
+      <div class="row">
+        <div><label>Nombre</label><input class="p-nombre" required value="${esc(d.nombre || '')}" ${i === 0 ? 'autocomplete="given-name"' : 'autocomplete="off"'}></div>
+        <div><label>Apellido</label><input class="p-apellido" required value="${esc(d.apellido || '')}" ${i === 0 ? 'autocomplete="family-name"' : 'autocomplete="off"'}></div>
+      </div>
+      <label>DNI</label><input class="p-dni" inputmode="numeric" required value="${esc(d.dni || '')}" autocomplete="off" placeholder="Sin puntos">
+    </div>`;
+  }
+  $('personas').innerHTML = h;
+  total();
+}
+function total() {
+  const n = Number($('cantidad').value);
+  const normal = ev.tanda.precio * n;
+  if (ev.promo && n === ev.promo.cantidad) {
+    $('total').innerHTML = `<s class="muted" style="font-weight:600;font-size:16px">${fmt(normal)}</s> ${fmt(ev.promo.precio)}`;
+    $('promo-aplicada').style.display = 'block';
+  } else {
+    $('total').textContent = fmt(normal);
+    $('promo-aplicada').style.display = 'none';
+  }
+}
+
+$('f').onsubmit = async (e) => {
+  e.preventDefault();
+  $('err').textContent = '';
+  if (!metodoSel) return ($('err').textContent = 'Elegí la forma de pago');
+  $('comprar').disabled = true; $('comprar').textContent = 'Procesando…';
+  try {
+    const r = await fetch('/api/ordenes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asistentes: (guardarDatos(), datos.slice(0, Number($('cantidad').value))), email: $('email').value, telefono: $('telefono').value, metodo: metodoSel }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Error');
+    location.href = d.url;
+  } catch (er) {
+    $('err').textContent = er.message;
+    $('comprar').disabled = false; $('comprar').textContent = 'Continuar';
+  }
+};
+cargar();
+</script>
+</body>
+</html>
