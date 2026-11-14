@@ -102,8 +102,10 @@ async function resumen() {
   $('stats').innerHTML = h;
   const dm = (iso) => iso ? iso.split('-').reverse().slice(0, 2).join('/') : '';
   $('tandas').innerHTML = r.porTipo.map((t) => `<div class="stat ${t.actual ? 'actual' : ''}">
-    <div class="v">${t.vendidas}</div>
-    <div class="l"><b style="color:var(--text)">${esc(t.nombre)}</b>${t.desde ? ` · ${fmt(t.precio)} · ${dm(t.desde)} al ${dm(t.hasta)}` : ''}${t.actual ? ' · <b>EN VENTA</b>' : ''}</div></div>`).join('');
+    <div class="v">${t.vendidas}${t.cupo ? `<span class="muted" style="font-size:16px"> / ${t.cupo}</span>` : ''}</div>
+    <div class="l"><b style="color:var(--text)">${esc(t.nombre)}</b>${t.desde ? ` · ${fmt(t.precio)} · ${dm(t.desde)} al ${esc(t.hastaTexto)}` : ''}${t.actual ? ' · <b>EN VENTA</b>' : ''}</div></div>`).join('')
+    + (r.promo ? `<div class="stat"><div class="v">${r.promo.usadas}<span class="muted" style="font-size:16px"> / ${r.promo.maximo}</span></div>
+      <div class="l"><b style="color:var(--text)">Promos vendidas</b> · ${r.promo.cantidad} entradas x ${fmt(r.promo.precio)} (${esc(r.promo.tanda)})</div></div>` : '');
 }
 
 async function lista() {
@@ -113,7 +115,8 @@ async function lista() {
   $('lista').innerHTML = ordenes.length ? ordenes.map((o) => `<tr>
     <td>${fecha(o.created_at)}</td>
     <td><b>${esc(o.nombre)}</b><div class="muted">${esc(o.email)} · DNI ${esc(o.dni)}${o.telefono ? ' · ' + esc(o.telefono) : ''}</div></td>
-    <td>${o.cantidad} × ${esc(o.tipoNombre)}<div class="muted">${fmt(o.total)}</div></td>
+    <td>${o.cantidad} × ${esc(o.tipoNombre)}${o.promo ? ' <span class="pill pendiente">PROMO</span>' : ''}<div class="muted">${fmt(o.total)}</div>
+      ${o.asistentes && o.asistentes.length > 1 ? `<details><summary class="muted" style="cursor:pointer">Ver personas</summary>${o.asistentes.map((a, i) => `<div>${i + 1}. ${esc(a.nombre)} ${esc(a.apellido)} · DNI ${esc(a.dni)}</div>`).join('')}</details>` : ''}</td>
     <td class="hide-m">${met[o.metodo] || o.metodo}${o.nota_pago ? `<div class="muted">${esc(o.nota_pago)}</div>` : ''}</td>
     <td><span class="pill ${o.estado}">${est[o.estado] || o.estado}</span></td>
     <td><div class="acciones">

@@ -35,7 +35,7 @@ function encabezado(o) {
   const p = o.evento.nombre.split(' '); const u = p.length > 1 ? p.pop() : '';
   return `<div class="hero"><h1>${esc(p.join(' '))}${u ? ` <span class="l">${esc(u)}</span>` : ''}</h1><p class="meta">${esc(o.evento.fecha)}</p><p>${esc(o.evento.lugar || '')}</p></div>
   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center">
-    <div><b>${esc(o.nombre)}</b><div class="muted">${o.cantidad} ${o.cantidad === 1 ? 'entrada' : 'entradas'} · ${esc(o.tipo)} ·${o.metodo === 'cortesia' ? 'Invitación' : fmt(o.total)}</div></div>
+    <div><b>${esc(o.nombre)}</b><div class="muted">${o.cantidad} ${o.cantidad === 1 ? 'entrada' : 'entradas'} · ${esc(o.tipo)}${o.promo ? ' · PROMO' : ''} · ${o.metodo === 'cortesia' ? 'Invitación' : fmt(o.total)}</div></div>
     <span class="pill ${o.estado}">${estados[o.estado] || o.estado}</span></div></div>`;
 }
 
@@ -47,7 +47,8 @@ function render(o) {
     o.tickets.forEach((t) => {
       h += `<div class="ticket ${t.usado ? 'usado' : ''}">
         <h3>Entrada ${t.n} de ${o.cantidad} · ${esc(o.tipo)}</h3>
-        <div>${esc(o.nombre)}</div>
+        <div style="font-size:18px;font-weight:700;margin-top:4px">${esc(t.nombre)}</div>
+        <div>DNI ${esc(t.dni)}</div>
         <img src="${t.qr}" alt="QR de la entrada ${t.n}">
         <div class="code">${esc(t.code)}</div>
         ${t.usado ? '<p><b>Ya ingresó</b></p>' : ''}

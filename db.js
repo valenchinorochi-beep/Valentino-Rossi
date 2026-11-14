@@ -61,6 +61,14 @@ async function init() {
     used_by TEXT
   )`);
   await impl.all(`CREATE INDEX IF NOT EXISTS tickets_order ON tickets(order_id)`);
+  // Columnas nuevas (se agregan solas si la base ya existía)
+  for (const col of ['asistentes TEXT', 'promo INTEGER DEFAULT 0']) {
+    try {
+      await impl.all(`ALTER TABLE orders ADD COLUMN ${impl.kind === 'postgres' ? 'IF NOT EXISTS ' : ''}${col}`);
+    } catch (e) {
+      if (!/duplicate column/i.test(e.message)) throw e;
+    }
+  }
 }
 
 module.exports = { all: (s, p) => impl.all(s, p), init, kind: () => impl.kind };

@@ -6,7 +6,10 @@ const QRCode = require('qrcode');
 const db = require('./db');
 
 // ---------- Configuración ----------
-const EVENTO = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'evento.json'), 'utf8'));
+// Funciona tanto con carpetas (src/, public/) como con todos los archivos sueltos en la raíz.
+const ROOT = fs.existsSync(path.join(__dirname, 'evento.json')) ? __dirname : path.join(__dirname, '..');
+const PUBLIC_DIR = fs.existsSync(path.join(ROOT, 'public')) ? path.join(ROOT, 'public') : ROOT;
+const EVENTO = JSON.parse(fs.readFileSync(path.join(ROOT, 'evento.json'), 'utf8'));
 const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 const MP_TOKEN = process.env.MP_ACCESS_TOKEN || '';
@@ -35,7 +38,13 @@ app.use(express.urlencoded({ extended: false }));
 app.get('/vendor/html5-qrcode.min.js', (req, res) =>
   res.sendFile(require.resolve('html5-qrcode/html5-qrcode.min.js'))
 );
-app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
+// Solo se sirven estos archivos públicos (nunca el código del servidor ni la configuración)
+const PUBLICOS = { '/': 'index.html', '/orden': 'orden.html', '/scanner': 'scanner.html', '/admin': 'admin.html', '/styles.css': 'styles.css', '/limon.svg': 'limon.svg' };
+for (const [ruta, archivo] of Object.entries(PUBLICOS)) {
+  const enviar = (req, res) => res.sendFile(path.join(PUBLIC_DIR, archivo));
+  app.get(ruta, enviar);
+  if (archivo.endsWith('.html') && ruta !== '/') app.get(`/${archivo}`, enviar);
+}
 
 // ---------- Utilidades ----------
 // FECHA_SIMULADA solo sirve para probar las tandas (ej: 2026-11-28T12:00:00-03:00). No usar en producción.
@@ -45,32 +54,60 @@ const nuevoId = () => crypto.randomBytes(12).toString('base64url');
 const nuevoCodigo = () => 'TK-' + crypto.randomBytes(16).toString('base64url');
 const limpio = (s, max = 120) => String(s ?? '').trim().slice(0, max);
 
-// Tandas: cada una vale desde las 00:00 de "desde" hasta las 23:59:59 de "hasta" (hora Argentina)
+// Tandas: cada una vale desde las 00:00 de "desde" hasta "hasta" a las 23:59 (o a "hastaHora"), hora Argentina.
+// Además, cada tanda tiene un cupo: si se agota antes de su fecha, se abre la siguiente en el momento.
 const TZ = EVENTO.zonaHoraria || '-03:00';
 const TANDAS = EVENTO.tandas.map((t) => ({
   ...t,
-  inicio: Date.parse(`${t.desde}T00:00:00${TZ}`),
-  fin: Date.parse(`${t.hasta}T23:59:59.999${TZ}`),
+  inicio: Date.parse(`${t.desde}T${t.desdeHora || '00:00'}:00${TZ}`),
+  fin: t.hastaHora ? Date.parse(`${t.hasta}T${t.hastaHora}:00${TZ}`) - 1 : Date.parse(`${t.hasta}T23:59:59.999${TZ}`),
 }));
+const PROMO = EVENTO.promo || null;
 const INVITACION = { id: 'invitacion', nombre: 'Invitación', precio: 0 };
 const tipoPorId = (id) => (id === INVITACION.id ? INVITACION : TANDAS.find((t) => t.id === id));
-const tandaActual = () => TANDAS.find((t) => now() >= t.inicio && now() <= t.fin) || null;
+const ddmm = (iso) => iso.split('-').reverse().slice(0, 2).join('/');
 
-async function vendidos() {
-  const t = now();
-  const rows = await db.all(
-    `SELECT COALESCE(SUM(cantidad),0) AS n FROM orders WHERE (
-       estado = 'pagado'
-       OR (estado = 'pendiente' AND metodo = 'mp' AND created_at > $1)
-       OR (estado = 'pendiente' AND metodo = 'transfer' AND (comprobante IS NOT NULL OR created_at > $2))
-     )`,
-    [t - RESERVA_MP_MS, t - RESERVA_TRANSF_MS]
-  );
+// Condición SQL de órdenes que ocupan lugar: pagadas, o pendientes recientes (reserva temporal)
+const OCUPA = `(estado = 'pagado'
+  OR (estado = 'pendiente' AND metodo = 'mp' AND created_at > $1)
+  OR (estado = 'pendiente' AND metodo = 'transfer' AND (comprobante IS NOT NULL OR created_at > $2)))`;
+const paramsOcupa = () => [now() - RESERVA_MP_MS, now() - RESERVA_TRANSF_MS];
+
+async function ocupadasPorTanda() {
+  const rows = await db.all(`SELECT tipo, COALESCE(SUM(cantidad),0) AS n FROM orders WHERE ${OCUPA} GROUP BY tipo`, paramsOcupa());
+  const m = {};
+  for (const r of rows) m[r.tipo] = Number(r.n);
+  return m;
+}
+async function promosUsadas() {
+  const rows = await db.all(`SELECT COUNT(*) AS n FROM orders WHERE promo = 1 AND ${OCUPA}`, paramsOcupa());
   return Number(rows[0].n);
 }
-async function disponibles() {
-  if (!EVENTO.cupoTotal) return Infinity;
-  return Math.max(0, EVENTO.cupoTotal - (await vendidos()));
+
+// Calcula qué se está vendiendo ahora mismo
+async function estadoVenta() {
+  const ocupadas = await ocupadasPorTanda();
+  const t = now();
+  for (let i = 0; i < TANDAS.length; i++) {
+    const tanda = TANDAS[i];
+    const restantes = Math.max(0, tanda.cupo - (ocupadas[tanda.id] || 0));
+    const terminada = t > tanda.fin || restantes <= 0;
+    if (terminada) continue;
+    // La 1ra tanda abre en su fecha. Las demás abren en su fecha o antes, si la anterior se agotó.
+    if (t < tanda.inicio && i === 0) return { estado: 'proxima', abre: tanda.inicio };
+    const res = { estado: 'abierta', tanda, indice: i, restantes, siguiente: TANDAS[i + 1] || null };
+    if (PROMO && PROMO.tanda === tanda.id && restantes >= PROMO.cantidad) {
+      const quedan = PROMO.maximo - (await promosUsadas());
+      if (quedan > 0) res.promo = { cantidad: PROMO.cantidad, precio: PROMO.precio, quedan };
+    }
+    return res;
+  }
+  // No queda ninguna tanda: o se vendió todo, o pasó la fecha
+  return { estado: t > TANDAS[TANDAS.length - 1].fin ? 'cerrada' : 'agotada' };
+}
+
+function textoHasta(tanda) {
+  return tanda.hastaHora ? `${ddmm(tanda.hasta)} a las ${parseInt(tanda.hastaHora, 10)}${tanda.hastaHora.endsWith(':00') ? '' : tanda.hastaHora.slice(2)} hs` : ddmm(tanda.hasta);
 }
 
 // Marca la orden como pagada (una sola vez) y genera las entradas.
@@ -82,10 +119,16 @@ async function marcarPagada(orderId, extra = {}) {
   );
   if (!rows.length) return false; // ya estaba pagada
   const o = rows[0];
+  let asistentes = [];
+  try { asistentes = JSON.parse(o.asistentes || '[]'); } catch {}
   for (let i = 1; i <= o.cantidad; i++) {
+    // Cada entrada queda a nombre de su persona (si no hay datos, a nombre del comprador)
+    const a = asistentes[i - 1];
+    const nombre = a ? `${a.nombre} ${a.apellido}` : o.nombre;
+    const dni = a ? a.dni : o.dni;
     await db.all(
       `INSERT INTO tickets (code, order_id, tipo, nombre, dni, n) VALUES ($1,$2,$3,$4,$5,$6)`,
-      [nuevoCodigo(), o.id, o.tipo, o.nombre, o.dni, i]
+      [nuevoCodigo(), o.id, o.tipo, nombre, dni, i]
     );
   }
   console.log(`✅ Orden ${o.id} pagada (${o.cantidad} x ${o.tipo}) - ${o.nombre}`);
@@ -150,21 +193,20 @@ app.get('/api/evento', async (req, res) => {
     moneda: EVENTO.moneda, maxPorCompra: EVENTO.maxPorCompra,
     metodos: { mp: MP_ON, transfer: TRANSF_ON },
   };
-  const t = tandaActual();
-  if (t) {
-    // Solo se muestra la tanda vigente: nunca el precio de las próximas.
-    const disp = await disponibles();
-    const siguiente = TANDAS.find((x) => x.inicio > t.fin);
-    out.estado = disp > 0 ? 'abierta' : 'agotada';
-    out.tanda = { nombre: t.nombre, precio: t.precio, hasta: t.hasta, haySiguiente: !!siguiente };
-    out.disponibles = disp === Infinity ? null : disp;
-  } else if (now() < TANDAS[0].inicio) {
-    out.estado = 'proxima';
-    out.abre = TANDAS[0].inicio;
-  } else {
-    const prox = TANDAS.find((x) => x.inicio > now());
-    if (prox) { out.estado = 'proxima'; out.abre = prox.inicio; }
-    else out.estado = 'cerrada';
+  const v = await estadoVenta();
+  out.estado = v.estado;
+  if (v.estado === 'proxima') out.abre = v.abre;
+  if (v.estado === 'abierta') {
+    // Solo se manda la tanda vigente: nunca el precio de las próximas.
+    const t = v.tanda;
+    out.tanda = { nombre: t.nombre, precio: t.precio, hastaTexto: textoHasta(t), haySiguiente: !!v.siguiente };
+    out.maxCompra = Math.min(EVENTO.maxPorCompra || 6, v.restantes);
+    if (EVENTO.mostrarVendidasEn === t.id) {
+      const r = await db.all(`SELECT COUNT(*) AS n FROM tickets WHERE tipo = $1`, [t.id]);
+      out.vendidas = Number(r[0].n);
+    }
+    if (EVENTO.mostrarQuedanEn === t.id) out.quedan = v.restantes;
+    if (v.promo) out.promo = v.promo;
   }
   res.json(out);
 });
@@ -172,32 +214,54 @@ app.get('/api/evento', async (req, res) => {
 app.post('/api/ordenes', async (req, res) => {
   try {
     const b = req.body || {};
-    const nombre = limpio(b.nombre), email = limpio(b.email).toLowerCase(), dni = limpio(b.dni, 20).replace(/\D/g, '');
+    const email = limpio(b.email).toLowerCase();
     const telefono = limpio(b.telefono, 30);
-    const tipo = tandaActual(); // el precio lo define el servidor según la fecha, nunca el navegador
-    const cantidad = parseInt(b.cantidad, 10);
     const metodo = b.metodo;
-    if (nombre.length < 3) return res.status(400).json({ error: 'Ingresá tu nombre completo' });
+    const lista = Array.isArray(b.asistentes) ? b.asistentes : [];
+    const cantidad = lista.length;
+    if (!(cantidad >= 1 && cantidad <= (EVENTO.maxPorCompra || 6))) return res.status(400).json({ error: 'Cantidad inválida' });
+
+    // Datos de cada persona: una entrada = un nombre, apellido y DNI
+    const asistentes = [];
+    const dnis = new Set();
+    for (let i = 0; i < lista.length; i++) {
+      const a = lista[i] || {};
+      const nombre = limpio(a.nombre, 60), apellido = limpio(a.apellido, 60), dni = limpio(a.dni, 20).replace(/\D/g, '');
+      const quien = cantidad > 1 ? ` (entrada ${i + 1})` : '';
+      if (nombre.length < 2) return res.status(400).json({ error: `Falta el nombre${quien}` });
+      if (apellido.length < 2) return res.status(400).json({ error: `Falta el apellido${quien}` });
+      if (dni.length < 7 || dni.length > 9) return res.status(400).json({ error: `DNI inválido${quien}` });
+      if (dnis.has(dni)) return res.status(400).json({ error: `El DNI ${dni} está repetido: cada entrada tiene que ser de una persona distinta` });
+      dnis.add(dni);
+      asistentes.push({ nombre, apellido, dni });
+    }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Email inválido' });
-    if (dni.length < 6) return res.status(400).json({ error: 'DNI inválido' });
-    if (!tipo) return res.status(400).json({ error: 'La venta no está abierta en este momento' });
-    if (!(cantidad >= 1 && cantidad <= (EVENTO.maxPorCompra || 10))) return res.status(400).json({ error: 'Cantidad inválida' });
     if (!((metodo === 'mp' && MP_ON) || (metodo === 'transfer' && TRANSF_ON))) return res.status(400).json({ error: 'Método de pago no disponible' });
-    if ((await disponibles()) < cantidad) return res.status(409).json({ error: 'No quedan suficientes entradas' });
+
+    // El precio lo decide el servidor según la tanda vigente, nunca el navegador
+    const v = await estadoVenta();
+    if (v.estado !== 'abierta') return res.status(400).json({ error: 'La venta no está abierta en este momento' });
+    const tipo = v.tanda;
+    if (cantidad > v.restantes) return res.status(409).json({ error: `Solo quedan ${v.restantes} entradas a este precio` });
+    const esPromo = !!(v.promo && cantidad === v.promo.cantidad);
+    const total = esPromo ? v.promo.precio : tipo.precio * cantidad;
 
     const id = nuevoId();
-    const total = tipo.precio * cantidad;
+    const comprador = asistentes[0];
     await db.all(
-      `INSERT INTO orders (id, created_at, nombre, email, dni, telefono, tipo, cantidad, total, metodo, estado)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pendiente')`,
-      [id, now(), nombre, email, dni, telefono, tipo.id, cantidad, total, metodo]
+      `INSERT INTO orders (id, created_at, nombre, email, dni, telefono, tipo, cantidad, total, metodo, estado, asistentes, promo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pendiente',$11,$12)`,
+      [id, now(), `${comprador.nombre} ${comprador.apellido}`, email, comprador.dni, telefono, tipo.id, cantidad, total, metodo, JSON.stringify(asistentes), esPromo ? 1 : 0]
     );
+    const nombre = `${comprador.nombre} ${comprador.apellido}`;
 
     if (metodo === 'transfer') return res.json({ id, url: `/orden?id=${id}` });
 
     // Mercado Pago Checkout Pro
     const pref = {
-      items: [{ id: tipo.id, title: `${EVENTO.nombre} - Entrada (${tipo.nombre})`, quantity: cantidad, unit_price: tipo.precio, currency_id: EVENTO.moneda || 'ARS' }],
+      items: [esPromo
+        ? { id: 'promo', title: `${EVENTO.nombre} - Promo ${cantidad} entradas (${tipo.nombre})`, quantity: 1, unit_price: total, currency_id: EVENTO.moneda || 'ARS' }
+        : { id: tipo.id, title: `${EVENTO.nombre} - Entrada (${tipo.nombre})`, quantity: cantidad, unit_price: tipo.precio, currency_id: EVENTO.moneda || 'ARS' }],
       payer: { name: nombre, email },
       external_reference: id,
       back_urls: {
@@ -280,16 +344,16 @@ app.post('/webhook/mp', async (req, res) => {
 async function ordenPublica(o) {
   const out = {
     id: o.id, nombre: o.nombre, email: o.email, tipo: tipoPorId(o.tipo)?.nombre || o.tipo,
-    cantidad: o.cantidad, total: o.total, metodo: o.metodo, estado: o.estado,
+    cantidad: o.cantidad, total: o.total, metodo: o.metodo, estado: o.estado, promo: Number(o.promo) === 1,
     tieneComprobante: !!o.comprobante, evento: { nombre: EVENTO.nombre, fecha: EVENTO.fecha, lugar: EVENTO.lugar },
     moneda: EVENTO.moneda,
   };
   if (o.metodo === 'transfer' && o.estado === 'pendiente') out.transferencia = EVENTO.transferencia;
   if (o.estado === 'pagado') {
-    const ts = await db.all(`SELECT code, n, used_at FROM tickets WHERE order_id = $1 ORDER BY n`, [o.id]);
+    const ts = await db.all(`SELECT code, n, used_at, nombre, dni FROM tickets WHERE order_id = $1 ORDER BY n`, [o.id]);
     out.tickets = [];
     for (const t of ts) {
-      out.tickets.push({ n: t.n, code: t.code, usado: !!t.used_at, qr: await QRCode.toDataURL(t.code, { width: 480, margin: 2, errorCorrectionLevel: 'M' }) });
+      out.tickets.push({ n: t.n, code: t.code, nombre: t.nombre, dni: t.dni, usado: !!t.used_at, qr: await QRCode.toDataURL(t.code, { width: 480, margin: 2, errorCorrectionLevel: 'M' }) });
     }
   }
   return out;
@@ -347,16 +411,21 @@ app.get('/api/scan/stats', requiere('staff', 'admin'), async (req, res) => {
 // ---------- Admin ----------
 app.get('/api/admin/resumen', requiere('admin'), async (req, res) => {
   const porTipo = [];
-  const actual = tandaActual();
+  const v = await estadoVenta();
   for (const t of [...TANDAS, INVITACION]) {
     const r = await db.all(`SELECT COUNT(*) AS vendidas, COUNT(used_at) AS ingresaron FROM tickets WHERE tipo = $1`, [t.id]);
-    porTipo.push({ id: t.id, nombre: t.nombre, precio: t.precio, desde: t.desde, hasta: t.hasta, actual: actual?.id === t.id, vendidas: Number(r[0].vendidas), ingresaron: Number(r[0].ingresaron) });
+    porTipo.push({ id: t.id, nombre: t.nombre, precio: t.precio, cupo: t.cupo || null, desde: t.desde, hasta: t.hasta, hastaTexto: t.desde ? textoHasta(t) : '', actual: v.tanda?.id === t.id, vendidas: Number(r[0].vendidas), ingresaron: Number(r[0].ingresaron) });
+  }
+  let promo = null;
+  if (PROMO) {
+    const r = await db.all(`SELECT COUNT(*) AS n FROM orders WHERE promo = 1 AND estado = 'pagado'`);
+    promo = { usadas: Number(r[0].n), maximo: PROMO.maximo, cantidad: PROMO.cantidad, precio: PROMO.precio, tanda: tipoPorId(PROMO.tanda)?.nombre };
   }
   const tot = await db.all(`SELECT COUNT(*) AS vendidas, COUNT(used_at) AS ingresaron FROM tickets`);
   const rec = await db.all(`SELECT COALESCE(SUM(total),0) AS s FROM orders WHERE estado = 'pagado'`);
   const pend = await db.all(`SELECT COUNT(*) AS n FROM orders WHERE estado = 'pendiente' AND metodo = 'transfer' AND comprobante IS NOT NULL`);
   res.json({
-    porTipo, cupoTotal: EVENTO.cupoTotal || null, vendidas: Number(tot[0].vendidas), ingresaron: Number(tot[0].ingresaron),
+    porTipo, promo, cupoTotal: TANDAS.reduce((s, t) => s + (t.cupo || 0), 0) || null, vendidas: Number(tot[0].vendidas), ingresaron: Number(tot[0].ingresaron),
     recaudado: Number(rec[0].s), transferenciasARevisar: Number(pend[0].n), moneda: EVENTO.moneda,
   });
 });
@@ -371,15 +440,16 @@ app.get('/api/admin/ordenes', requiere('admin'), async (req, res) => {
   const params = [];
   if (q) {
     params.push(`%${q}%`);
-    where += ` AND (LOWER(nombre) LIKE $1 OR LOWER(email) LIKE $1 OR dni LIKE $1 OR id LIKE $1)`;
+    where += ` AND (LOWER(nombre) LIKE $1 OR LOWER(email) LIKE $1 OR dni LIKE $1 OR id LIKE $1 OR LOWER(COALESCE(asistentes,'')) LIKE $1)`;
   }
   const rows = await db.all(
-    `SELECT id, created_at, nombre, email, dni, telefono, tipo, cantidad, total, metodo, estado, nota_pago, paid_at,
+    `SELECT id, created_at, nombre, email, dni, telefono, tipo, cantidad, total, metodo, estado, nota_pago, paid_at, asistentes, promo,
        CASE WHEN comprobante IS NULL THEN 0 ELSE 1 END AS tiene_comprobante
      FROM orders WHERE ${where} ORDER BY created_at DESC LIMIT 300`,
     params
   );
-  res.json(rows.map((r) => ({ ...r, created_at: Number(r.created_at), paid_at: r.paid_at ? Number(r.paid_at) : null, tipoNombre: tipoPorId(r.tipo)?.nombre || r.tipo })));
+  const parse = (s) => { try { return JSON.parse(s || '[]'); } catch { return []; } };
+  res.json(rows.map((r) => ({ ...r, asistentes: parse(r.asistentes), promo: Number(r.promo) === 1, created_at: Number(r.created_at), paid_at: r.paid_at ? Number(r.paid_at) : null, tipoNombre: tipoPorId(r.tipo)?.nombre || r.tipo })));
 });
 
 app.get('/api/admin/ordenes/:id/comprobante', requiere('admin'), async (req, res) => {
