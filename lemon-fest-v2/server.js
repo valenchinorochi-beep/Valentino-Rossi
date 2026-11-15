@@ -132,7 +132,71 @@ async function marcarPagada(orderId, extra = {}) {
     );
   }
   console.log(`✅ Orden ${o.id} pagada (${o.cantidad} x ${o.tipo}) - ${o.nombre}`);
+  // Manda los QR por mail sin frenar la respuesta
+  enviarEntradasPorMail(o.id).catch((e) => console.error('📧 Error enviando mail:', e.message));
   return true;
+}
+
+// ---------- Envío de entradas por mail (Brevo, por HTTPS: funciona en el plan gratis de Render) ----------
+const BREVO_KEY = process.env.BREVO_API_KEY || '';
+const MAIL_DE = process.env.EMAIL_REMITENTE || '';
+const MAIL_NOMBRE = process.env.EMAIL_NOMBRE || EVENTO.nombre;
+const MAIL_ON = !!(BREVO_KEY && MAIL_DE);
+const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const nombreArchivo = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+async function enviarEntradasPorMail(orderId) {
+  if (!MAIL_ON) { console.warn('📧 Mail desactivado: faltan BREVO_API_KEY o EMAIL_REMITENTE'); return { ok: false, error: 'El envío de mails no está configurado' }; }
+  const o = (await db.all(`SELECT * FROM orders WHERE id = $1`, [orderId]))[0];
+  if (!o || o.estado !== 'pagado') return { ok: false, error: 'La orden no está pagada' };
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(o.email || '')) return { ok: false, error: 'La orden no tiene un email válido' };
+  const ts = await db.all(`SELECT code, n, nombre, dni FROM tickets WHERE order_id = $1 ORDER BY n`, [o.id]);
+  const link = `${BASE_URL}/orden?id=${o.id}`;
+  const tanda = tipoPorId(o.tipo)?.nombre || o.tipo;
+
+  const adjuntos = [];
+  for (const t of ts) {
+    const png = await QRCode.toBuffer(t.code, { width: 600, margin: 2, errorCorrectionLevel: 'M' });
+    adjuntos.push({ name: `entrada-${t.n}-${nombreArchivo(t.nombre)}.png`, content: png.toString('base64') });
+  }
+  const filas = ts.map((t) => `<tr><td style="padding:8px 12px;border-bottom:1px solid #f0e6bf"><b>Entrada ${t.n}</b></td>
+    <td style="padding:8px 12px;border-bottom:1px solid #f0e6bf">${escHtml(t.nombre)}<br><span style="color:#6d7566">DNI ${escHtml(t.dni)}</span></td>
+    <td style="padding:8px 12px;border-bottom:1px solid #f0e6bf;color:#6d7566;font-size:13px">entrada-${t.n}-${escHtml(nombreArchivo(t.nombre))}.png</td></tr>`).join('');
+  const html = `<!doctype html><html><body style="margin:0;background:#fffbea;font-family:Arial,Helvetica,sans-serif;color:#22301f">
+  <div style="max-width:560px;margin:0 auto;padding:24px 16px">
+    <div style="background:#fde98a;border-radius:16px;padding:24px">
+      <div style="font-size:30px;font-weight:900">🍋 ${escHtml(EVENTO.nombre)}</div>
+      <div style="font-weight:700;margin-top:4px">${escHtml(EVENTO.fecha)}</div>
+      ${EVENTO.lugar ? `<div>${escHtml(EVENTO.lugar)}</div>` : ''}
+    </div>
+    <div style="background:#fff;border:1px solid #efe6c4;border-radius:16px;padding:20px;margin-top:14px">
+      <p style="margin-top:0">¡Hola ${escHtml(o.nombre.split(' ')[0])}! Tu pago fue confirmado ✅</p>
+      <p>Te mandamos <b>${ts.length === 1 ? 'tu entrada' : `tus ${ts.length} entradas`}</b> (${escHtml(tanda)}). Cada una tiene su QR <b>adjunto en este mail</b>, a nombre de cada persona:</p>
+      <table style="width:100%;border-collapse:collapse;font-size:15px">${filas}</table>
+      <p style="margin:20px 0;text-align:center"><a href="${link}" style="background:#f5cf2a;color:#2a2a12;text-decoration:none;font-weight:800;padding:14px 22px;border-radius:12px;display:inline-block">Ver mis entradas</a></p>
+      <p style="font-size:14px;color:#6d7566">En la puerta cada persona muestra <b>su QR</b> y <b>su DNI</b>. Cada QR se puede usar una sola vez: no lo compartas.${ts.length > 1 ? ' Reenviale a cada persona su QR.' : ''}</p>
+    </div>
+  </div></body></html>`;
+
+  const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: { 'api-key': BREVO_KEY, 'Content-Type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({
+      sender: { name: MAIL_NOMBRE, email: MAIL_DE },
+      to: [{ email: o.email, name: o.nombre }],
+      subject: `🍋 ${ts.length === 1 ? 'Tu entrada' : 'Tus entradas'} para ${EVENTO.nombre}`,
+      htmlContent: html,
+      attachment: adjuntos,
+    }),
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    console.error(`📧 Brevo respondió ${r.status}: ${txt.slice(0, 300)}`);
+    return { ok: false, error: `Brevo: ${r.status}` };
+  }
+  await db.all(`UPDATE orders SET email_enviado = $2 WHERE id = $1`, [o.id, now()]);
+  console.log(`📧 Entradas enviadas a ${o.email} (orden ${o.id})`);
+  return { ok: true };
 }
 
 // ---------- Sesiones (cookie firmada) ----------
@@ -345,7 +409,7 @@ async function ordenPublica(o) {
   const out = {
     id: o.id, nombre: o.nombre, email: o.email, tipo: tipoPorId(o.tipo)?.nombre || o.tipo,
     cantidad: o.cantidad, total: o.total, metodo: o.metodo, estado: o.estado, promo: Number(o.promo) === 1,
-    tieneComprobante: !!o.comprobante, evento: { nombre: EVENTO.nombre, fecha: EVENTO.fecha, lugar: EVENTO.lugar },
+    tieneComprobante: !!o.comprobante, mailEnviado: !!o.email_enviado, mailActivo: MAIL_ON, evento: { nombre: EVENTO.nombre, fecha: EVENTO.fecha, lugar: EVENTO.lugar },
     moneda: EVENTO.moneda,
   };
   if (o.metodo === 'transfer' && o.estado === 'pendiente') out.transferencia = EVENTO.transferencia;
@@ -444,12 +508,12 @@ app.get('/api/admin/ordenes', requiere('admin'), async (req, res) => {
   }
   const rows = await db.all(
     `SELECT id, created_at, nombre, email, dni, telefono, tipo, cantidad, total, metodo, estado, nota_pago, paid_at, asistentes, promo,
-       CASE WHEN comprobante IS NULL THEN 0 ELSE 1 END AS tiene_comprobante
+       CASE WHEN comprobante IS NULL THEN 0 ELSE 1 END AS tiene_comprobante, email_enviado
      FROM orders WHERE ${where} ORDER BY created_at DESC LIMIT 300`,
     params
   );
   const parse = (s) => { try { return JSON.parse(s || '[]'); } catch { return []; } };
-  res.json(rows.map((r) => ({ ...r, asistentes: parse(r.asistentes), promo: Number(r.promo) === 1, created_at: Number(r.created_at), paid_at: r.paid_at ? Number(r.paid_at) : null, tipoNombre: tipoPorId(r.tipo)?.nombre || r.tipo })));
+  res.json(rows.map((r) => ({ ...r, asistentes: parse(r.asistentes), promo: Number(r.promo) === 1, email_enviado: r.email_enviado ? Number(r.email_enviado) : null, created_at: Number(r.created_at), paid_at: r.paid_at ? Number(r.paid_at) : null, tipoNombre: tipoPorId(r.tipo)?.nombre || r.tipo })));
 });
 
 app.get('/api/admin/ordenes/:id/comprobante', requiere('admin'), async (req, res) => {
@@ -458,6 +522,10 @@ app.get('/api/admin/ordenes/:id/comprobante', requiere('admin'), async (req, res
   if (!c) return res.sendStatus(404);
   const [meta, b64] = c.split(',');
   res.type(meta.slice(5, meta.indexOf(';'))).send(Buffer.from(b64, 'base64'));
+});
+
+app.post('/api/admin/ordenes/:id/reenviar', requiere('admin'), async (req, res) => {
+  res.json(await enviarEntradasPorMail(req.params.id));
 });
 
 app.post('/api/admin/ordenes/:id/aprobar', requiere('admin'), async (req, res) => {
@@ -505,6 +573,6 @@ app.get('/api/admin/export.csv', requiere('admin'), async (req, res) => {
 db.init().then(() => {
   app.listen(PORT, () => {
     console.log(`🎉 ${EVENTO.nombre} corriendo en ${BASE_URL} (base de datos: ${db.kind()})`);
-    console.log(`   Mercado Pago: ${MP_ON ? 'activo' : 'inactivo'} · Transferencia: ${TRANSF_ON ? 'activa' : 'inactiva'}`);
+    console.log(`   Mercado Pago: ${MP_ON ? 'activo' : 'inactivo'} · Transferencia: ${TRANSF_ON ? 'activa' : 'inactiva'} · Mails: ${MAIL_ON ? 'activos (' + MAIL_DE + ')' : 'inactivos'}`);
   });
 });

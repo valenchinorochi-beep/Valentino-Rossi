@@ -123,6 +123,7 @@ async function lista() {
       ${o.tiene_comprobante ? `<button class="btn sec sm" data-ver="${o.id}">Ver comprobante</button>` : ''}
       ${o.estado === 'pendiente' && o.metodo === 'transfer' ? `<button class="btn ok sm" data-ap="${o.id}">Aprobar</button><button class="btn bad sm" data-re="${o.id}">Rechazar</button>` : ''}
       ${o.estado === 'pagado' ? `<button class="btn sec sm" data-link="${o.id}">Copiar link QR</button>` : ''}
+      ${o.estado === 'pagado' && o.email && o.email !== '-' ? `<button class="btn sec sm" data-mail="${o.id}" title="${o.email_enviado ? 'Enviado el ' + fecha(o.email_enviado) : 'Todavía no se envió'}">${o.email_enviado ? '📧 Reenviar mail' : '📧 Enviar mail'}</button>` : ''}
     </div></td></tr>`).join('') : '<tr><td colspan="6" class="muted">No hay órdenes acá.</td></tr>';
 }
 
@@ -131,6 +132,11 @@ $('lista').onclick = async (e) => {
   if (b.dataset.ver) verComprobante(b.dataset.ver);
   if (b.dataset.ap) { b.disabled = true; await api(`/api/admin/ordenes/${b.dataset.ap}/aprobar`, { method: 'POST' }); cerrarModal(); resumen(); lista(); }
   if (b.dataset.re) { if (!confirmar(b)) return; await api(`/api/admin/ordenes/${b.dataset.re}/rechazar`, { method: 'POST' }); cerrarModal(); resumen(); lista(); }
+  if (b.dataset.mail) {
+    b.disabled = true; b.textContent = 'Enviando…';
+    const d = await api(`/api/admin/ordenes/${b.dataset.mail}/reenviar`, { method: 'POST' });
+    b.textContent = d.ok ? '✔ Mail enviado' : '✖ ' + (d.error || 'Error'); b.disabled = false;
+  }
   if (b.dataset.link) { await navigator.clipboard.writeText(`${location.origin}/orden?id=${b.dataset.link}`); b.textContent = '¡Copiado!'; }
 };
 // Confirmación en dos toques (sin diálogos del navegador)

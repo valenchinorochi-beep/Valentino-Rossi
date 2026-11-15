@@ -62,7 +62,7 @@ async function init() {
   )`);
   await impl.all(`CREATE INDEX IF NOT EXISTS tickets_order ON tickets(order_id)`);
   // Columnas nuevas (se agregan solas si la base ya existía)
-  for (const col of ['asistentes TEXT', 'promo INTEGER DEFAULT 0']) {
+  for (const col of ['asistentes TEXT', 'promo INTEGER DEFAULT 0', 'email_enviado BIGINT']) {
     try {
       await impl.all(`ALTER TABLE orders ADD COLUMN ${impl.kind === 'postgres' ? 'IF NOT EXISTS ' : ''}${col}`);
     } catch (e) {

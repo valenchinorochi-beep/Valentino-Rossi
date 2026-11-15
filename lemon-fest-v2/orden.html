@@ -42,6 +42,7 @@ function encabezado(o) {
 function render(o) {
   let h = encabezado(o);
   if (o.estado === 'pagado') {
+    if (o.mailEnviado) h += `<div class="banner">📧 Te mandamos ${o.cantidad === 1 ? 'tu entrada' : 'las entradas'} a <b>${esc(o.email)}</b>. Si no lo ves, revisá Spam o Promociones.</div>`;
     h += `<div class="card"><b>📌 Guardá este link</b> o descargá los QR: los vas a mostrar en la puerta junto con tu DNI.
       <button class="btn sec sm" style="margin-top:10px" onclick="navigator.clipboard.writeText(location.href).then(()=>this.textContent='¡Link copiado!')">Copiar link</button></div>`;
     o.tickets.forEach((t) => {
@@ -72,7 +73,7 @@ function render(o) {
       </div></div>`;
     if (o.tieneComprobante) {
       h += `<div class="card" style="text-align:center"><div class="spinner"></div><p><b>Comprobante recibido ✔</b></p>
-        <p class="muted">Lo estamos revisando. Cuando se apruebe, tus QR aparecen en esta misma página. Guardá el link.</p>
+        <p class="muted">Lo estamos revisando. Cuando se apruebe, tus QR aparecen en esta misma página${o.mailActivo ? ` y te llegan por mail a <b>${esc(o.email)}</b>` : ''}. Guardá el link.</p>
         <button class="btn sec sm" onclick="navigator.clipboard.writeText(location.href).then(()=>this.textContent='¡Link copiado!')">Copiar link</button></div>`;
       timer = setTimeout(cargar, 15000);
     } else {
