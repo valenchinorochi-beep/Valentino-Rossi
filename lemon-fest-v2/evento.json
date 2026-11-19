@@ -7,11 +7,11 @@
   "zonaHoraria": "-03:00",
   "maxPorCompra": 6,
   "tandas": [
-    { "id": "tanda1", "nombre": "1ra tanda", "desde": "2026-11-19", "hasta": "2026-11-26", "precio": 12500, "cupo": 300 },
-    { "id": "tanda2", "nombre": "2da tanda", "desde": "2026-11-27", "hasta": "2026-12-03", "precio": 15000, "cupo": 250 },
-    { "id": "tanda3", "nombre": "3ra tanda", "desde": "2026-12-04", "hasta": "2026-12-11", "precio": 17500, "cupo": 65 },
-    { "id": "tanda4", "nombre": "4ta tanda", "desde": "2026-12-12", "hasta": "2026-12-16", "precio": 20000, "cupo": 125 },
-    { "id": "tanda5", "nombre": "Última tanda", "desde": "2026-12-17", "hasta": "2026-12-19", "hastaHora": "08:00", "precio": 25000, "cupo": 50 }
+    { "id": "tanda1", "nombre": "1ra tanda", "desde": "2026-11-23", "hasta": "2026-11-28", "precio": 12500, "cupo": 300 },
+    { "id": "tanda2", "nombre": "2da tanda", "desde": "2026-11-29", "hasta": "2026-12-04", "precio": 15000, "cupo": 250 },
+    { "id": "tanda3", "nombre": "3ra tanda", "desde": "2026-12-05", "hasta": "2026-12-10", "precio": 17500, "cupo": 65 },
+    { "id": "tanda4", "nombre": "4ta tanda", "desde": "2026-12-11", "hasta": "2026-12-16", "precio": 20000, "cupo": 125 },
+    { "id": "tanda5", "nombre": "Última tanda", "desde": "2026-12-17", "hasta": "2026-12-18", "precio": 25000, "cupo": 50 }
   ],
   "promo": {
     "tanda": "tanda3",
